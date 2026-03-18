@@ -1,19 +1,52 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
 
 export default function GitHubPage() {
   const [token, setToken] = useState("");
+  const queryClient = useQueryClient();
 
-  const profileMutation = useMutation(
-    trpc.githubProfile.mutationOptions()
-  );
+  const profilesQuery = useQuery(trpc.listGithubProfiles.queryOptions());
+
+  const createMutation = useMutation({
+    ...trpc.githubProfile.mutationOptions(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: trpc.listGithubProfiles.queryOptions().queryKey });
+    },
+  });
+
+  const updateMutation = useMutation({
+    ...trpc.updateGithubProfile.mutationOptions(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: trpc.listGithubProfiles.queryOptions().queryKey });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    ...trpc.deleteGithubProfile.mutationOptions(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: trpc.listGithubProfiles.queryOptions().queryKey });
+    },
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    profileMutation.mutate({ token });
+    createMutation.mutate({ token });
+  };
+
+  const handleUpdate = (id: number) => {
+    if (!token) {
+      alert("请先输入 Token 再更新");
+      return;
+    }
+    updateMutation.mutate({ id, token });
+  };
+
+  const handleDelete = (id: number) => {
+    if (!confirm("确认删除这条记录？")) return;
+    deleteMutation.mutate({ id });
   };
 
   return (
@@ -37,49 +70,84 @@ export default function GitHubPage() {
 
         <button
           type="submit"
-          disabled={!token || profileMutation.isPending}
+          disabled={!token || createMutation.isPending}
           className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
         >
-          {profileMutation.isPending ? "Loading..." : "获取 GitHub 信息"}
+          {createMutation.isPending ? "Loading..." : "获取 GitHub 信息"}
         </button>
       </form>
 
-      {profileMutation.error && (
+      {createMutation.error && (
         <div className="mt-4 rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {profileMutation.error.message}
+          {createMutation.error.message}
         </div>
       )}
 
-      {profileMutation.data && (
-        <div className="mt-6 rounded-lg border p-4">
-          <div className="flex items-center gap-4">
-            <img
-              src={profileMutation.data.avatarUrl}
-              alt={profileMutation.data.login}
-              className="h-16 w-16 rounded-full"
-            />
-            <div>
-              <h2 className="text-lg font-semibold">
-                {profileMutation.data.name ?? profileMutation.data.login}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                @{profileMutation.data.login}
-              </p>
+      <div className="mt-8">
+        <h2 className="mb-4 text-xl font-semibold">已保存的 Profiles</h2>
+
+        {profilesQuery.isLoading && (
+          <p className="text-sm text-muted-foreground">加载中...</p>
+        )}
+
+        {profilesQuery.data?.length === 0 && (
+          <p className="text-sm text-muted-foreground">暂无记录</p>
+        )}
+
+        <div className="space-y-4">
+          {profilesQuery.data?.map((profile) => (
+            <div key={profile.id} className="rounded-lg border p-4">
+              <div className="flex items-center gap-4">
+                {profile.avatarUrl && (
+                  <img
+                    src={profile.avatarUrl}
+                    alt={profile.login}
+                    className="h-16 w-16 rounded-full"
+                  />
+                )}
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold">
+                    {profile.name ?? profile.login}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    @{profile.login}
+                  </p>
+                </div>
+              </div>
+
+              {profile.bio && (
+                <p className="mt-3 text-sm">{profile.bio}</p>
+              )}
+
+              <div className="mt-3 flex gap-4 text-sm text-muted-foreground">
+                <span>Public repos: {profile.publicRepos}</span>
+                {profile.githubCreatedAt && (
+                  <span>
+                    Joined: {new Date(profile.githubCreatedAt).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => handleUpdate(profile.id)}
+                  disabled={updateMutation.isPending}
+                  className="inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {updateMutation.isPending ? "更新中..." : "更新"}
+                </button>
+                <button
+                  onClick={() => handleDelete(profile.id)}
+                  disabled={deleteMutation.isPending}
+                  className="inline-flex items-center justify-center rounded-md border border-destructive/50 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {deleteMutation.isPending ? "删除中..." : "删除"}
+                </button>
+              </div>
             </div>
-          </div>
-
-          {profileMutation.data.bio && (
-            <p className="mt-3 text-sm">{profileMutation.data.bio}</p>
-          )}
-
-          <div className="mt-3 flex gap-4 text-sm text-muted-foreground">
-            <span>Public repos: {profileMutation.data.publicRepos}</span>
-            <span>
-              Joined: {new Date(profileMutation.data.githubCreatedAt).toLocaleDateString()}
-            </span>
-          </div>
+          ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
