@@ -31,14 +31,17 @@ app.get("/", (c) => {
   return c.text("OK");
 });
 
-import { serve } from "@hono/node-server";
+// Lambda 入口
+export const handler = async (event: any, context: any) => {
+  const { handle } = await import("hono/aws-lambda");
+  return handle(app)(event, context);
+};
 
-serve(
-  {
-    fetch: app.fetch,
-    port: 3000,
-  },
-  (info) => {
-    console.log(`Server is running on http://localhost:${info.port}`);
-  },
-);
+// 本地开发
+if (!process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  const { serve } = await import("@hono/node-server");
+  serve(
+    { fetch: app.fetch, port: 3000 },
+    (info) => console.log(`Server is running on http://localhost:${info.port}`),
+  );
+}
