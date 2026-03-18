@@ -1,1 +1,1 @@
-export {};
+export { githubProfiles } from "./github-profiles";
