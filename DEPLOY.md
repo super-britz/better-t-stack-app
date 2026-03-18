@@ -416,6 +416,99 @@ postgresql://postgres:<密码>@<RDS地址>:5432/bettertstack?sslmode=no-verify
 
 ---
 
+## 环境变量管理
+
+### 为什么生产环境变量不放在 .env 文件里
+
+如果把生产环境变量放在 `.env` 文件里：
+
+```
+风险 1：不小心提交到 Git → 密码上传到 GitHub → 任何人都能看到
+风险 2：本地文件泄露   → 电脑被盗、截图、共享屏幕 → 密码暴露
+风险 3：多人协作传递   → 通过微信/邮件传输密码 → 不安全
+```
+
+生产环境变量存在云平台的加密存储里，只有有权限的人才能看到：
+
+```
+Lambda 环境变量   → 存在 AWS 加密存储，通过 aws lambda update-function-configuration 设置
+Cloudflare Pages  → 存在 Cloudflare 加密存储，在控制台 Settings → Environment variables 设置
+```
+
+### 开发 vs 生产 对比
+
+| 变量 | 开发环境 | 生产环境 |
+|------|---------|----------|
+| `DATABASE_URL` | `localhost:5432`（Docker） | RDS 地址 + `?sslmode=no-verify` |
+| `CORS_ORIGIN` | `http://localhost:3001` | Cloudflare Pages 域名 |
+| `NEXT_PUBLIC_SERVER_URL` | `http://localhost:3000` | API Gateway 地址 |
+
+### 文件说明
+
+```
+apps/server/
+├── .env                      ← 本地开发用（不提交 Git）
+├── .env.example              ← 开发环境模板（提交 Git，给团队参考）
+└── .env.production.example   ← 生产环境说明（提交 Git）
+
+apps/web/
+├── .env                      ← 本地开发用（不提交 Git）
+├── .env.example              ← 开发环境模板（提交 Git）
+└── .env.production.example   ← 生产环境说明（提交 Git）
+```
+
+---
+
+## API 接口列表
+
+所有接口都在 API Gateway 地址下，路径以 `/trpc/` 开头。
+
+| 接口 | 类型 | 说明 |
+|------|------|------|
+| `healthCheck` | GET（query） | 健康检查 |
+| `listGithubProfiles` | GET（query） | 查询所有 GitHub profiles |
+| `githubProfile` | POST（mutation） | 新增 GitHub profile |
+| `updateGithubProfile` | POST（mutation） | 更新 GitHub profile |
+| `deleteGithubProfile` | POST（mutation） | 删除 GitHub profile |
+
+### GET 接口（query）
+
+```bash
+# 健康检查
+curl https://<ApiId>.execute-api.ap-southeast-1.amazonaws.com/trpc/healthCheck
+
+# 查询所有 GitHub profiles
+curl https://<ApiId>.execute-api.ap-southeast-1.amazonaws.com/trpc/listGithubProfiles
+```
+
+### POST 接口（mutation）
+
+tRPC 的请求体有固定格式，数据必须包在 `json` 字段里：
+
+```bash
+# 新增 GitHub profile
+curl -X POST \
+  https://<ApiId>.execute-api.ap-southeast-1.amazonaws.com/trpc/githubProfile \
+  -H "Content-Type: application/json" \
+  -d '{"json":{"token":"your-github-token"}}'
+
+# 更新 GitHub profile
+curl -X POST \
+  https://<ApiId>.execute-api.ap-southeast-1.amazonaws.com/trpc/updateGithubProfile \
+  -H "Content-Type: application/json" \
+  -d '{"json":{"id":1,"token":"your-github-token"}}'
+
+# 删除 GitHub profile
+curl -X POST \
+  https://<ApiId>.execute-api.ap-southeast-1.amazonaws.com/trpc/deleteGithubProfile \
+  -H "Content-Type: application/json" \
+  -d '{"json":{"id":1}}'
+```
+
+注意：tRPC 请求体格式是 `{"json": {...}}`，不是普通的 `{...}`，这是 tRPC 协议规定的。前端调用时 tRPC 客户端会自动处理，手动 curl 时需要注意。
+
+---
+
 ## 查看日志
 
 ```bash
