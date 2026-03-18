@@ -437,11 +437,11 @@ Cloudflare Pages  → 存在 Cloudflare 加密存储，在控制台 Settings →
 
 ### 开发 vs 生产 对比
 
-| 变量 | 开发环境 | 生产环境 |
-|------|---------|----------|
-| `DATABASE_URL` | `localhost:5432`（Docker） | RDS 地址 + `?sslmode=no-verify` |
-| `CORS_ORIGIN` | `http://localhost:3001` | Cloudflare Pages 域名 |
-| `NEXT_PUBLIC_SERVER_URL` | `http://localhost:3000` | API Gateway 地址 |
+| 变量 | 开发环境 | 生产环境 | 配置位置 |
+|------|---------|----------|--------|
+| `DATABASE_URL` | `localhost:5432`（Docker） | RDS 地址 + `?sslmode=no-verify` | Lambda 环境变量 |
+| `CORS_ORIGIN` | `http://localhost:3001` | Cloudflare Pages 域名 | Lambda 环境变量 |
+| `NEXT_PUBLIC_SERVER_URL` | `http://localhost:3000` | API Gateway 地址 | Cloudflare Pages Build Variables |
 
 ### 文件说明
 
@@ -506,6 +506,53 @@ curl -X POST \
 ```
 
 注意：tRPC 请求体格式是 `{"json": {...}}`，不是普通的 `{...}`，这是 tRPC 协议规定的。前端调用时 tRPC 客户端会自动处理，手动 curl 时需要注意。
+
+---
+
+## Cloudflare Pages 部署 Next.js
+
+### 正确的 Build configuration
+
+```
+Build command:   pnpm run build --filter web
+Output dir:      apps/web/out
+Root directory:  better-t-stack-app
+```
+
+Deploy command 和 Non-production branch deploy command 不需要填，Cloudflare Pages 会自动把 Output dir 里的静态文件部署到 CDN。
+
+### 坑 8：没有设置 output: "export"
+
+**现象**：部署后页面空白或路由不正常
+
+**原因**：Next.js 默认构建产物在 `.next/` 目录，包含服务端代码，Cloudflare Pages 无法直接运行。需要开启静态导出模式，把所有页面导出成纯 HTML/CSS/JS 文件。
+
+**解决**：修改 `apps/web/next.config.ts`：
+```ts
+const nextConfig: NextConfig = {
+  output: "export",  // ← 加这行，构建产物输出到 out/ 目录
+  typedRoutes: true,
+  reactCompiler: true,
+};
+```
+
+加了 `output: "export"` 之后构建产物从 `.next/` 变成 `out/`，所以 Output directory 要改成 `apps/web/out`。
+
+---
+
+### 坑 9：部署成功但显示 Disconnected
+
+**现象**：页面打开正常，但 API Status 显示 Disconnected
+
+**原因**：Lambda 的 `CORS_ORIGIN` 还是 `http://localhost:3001`，没有允许 Cloudflare Pages 的域名跨域访问。
+
+**解决**：更新 Lambda 环境变量，把 `CORS_ORIGIN` 改成 Cloudflare Pages 的域名：
+```bash
+aws lambda update-function-configuration \
+  --function-name better-t-stack-api \
+  --environment Variables="{DATABASE_URL=<数据库连接串>,CORS_ORIGIN=https://<your-app>.pages.dev}" \
+  --region ap-southeast-1
+```
 
 ---
 
