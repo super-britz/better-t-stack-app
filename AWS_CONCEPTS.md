@@ -24,11 +24,15 @@
 | NAT | Network Address Translation | 把私有 IP 替换成公网 IP 发出请求，返回时再替换回来 | 让私有网络内的设备能访问公网，同时节省公网 IP |
 | VPC | Virtual Private Cloud | AWS 上的私有网络空间，资源默认对公网不可见 | 隔离资源，防止数据库等敏感资源暴露在公网 |
 | 子网 | Subnet | VPC 内细分的网段，必须绑定一个可用区 | VPC 只是地址范围声明，资源必须放在子网里才能运行 |
-| 安全组 | Security Group | 资源级别的防火墙，控制允许哪些 IP/端口进出 | 精细控制每个资源的网络访问权限 |
+| 路由表 | Route Table | 定义网络包该往哪里发，格式为"目标地址段 → 下一跳" | 控制子网是公有还是私有的关键，没有路由表流量不知道往哪走 |
+| 安全组 | Security Group | 资源级别的有状态防火墙，只需配入站规则，响应流量自动放行 | 精细控制每个资源的网络访问权限 |
+| NACL | Network Access Control List | 子网级别的无状态防火墙，入站出站规则都要配，按编号顺序匹配 | 需要封锁整个子网的某段 IP 时使用，比如遭受 DDoS 时快速封禁来源 |
 | IGW | Internet Gateway | VPC 连接公网的出入口 | 没有 IGW，VPC 内的资源完全无法访问公网 |
 | NAT Gateway | Network Address Translation Gateway | 让私有子网的资源能主动访问公网，但公网不能主动进来 | 私有子网需要访问外部 API 或下载依赖，同时保持不可被公网访问 |
 | ALB | Application Load Balancer | 把流量分发到多个后端实例，支持按路径/域名路由 | 单个实例扛不住流量时，水平扩展并自动剔除故障实例 |
 | API Gateway | - | HTTP 入口，统一处理路由、认证、限流、日志、HTTPS | 避免每个后端服务重复实现这些通用功能，同时保护后端不直接暴露公网 |
+| VPN | Virtual Private Network | 在公网上建立加密隧道，连接本地网络和 AWS VPC | 公司员工或本地机房需要安全访问 AWS 内网资源 |
+| Direct Connect | AWS Direct Connect | 本地机房和 AWS 之间的专用物理线路，不走公网 | 需要稳定低延迟或大量数据传输，VPN 的公网波动无法满足要求 |
 
 ---
 
@@ -78,7 +82,15 @@ Region（地区）
     └── 私有子网（AZ-b）
             └── RDS（备用）
 
+流量控制两层：
+  NACL     → 子网边界，无状态，封整段 IP
+  安全组    → 资源边界，有状态，精细控制端口和来源
+
+本地机房连接 AWS：
+  VPN          → 走公网加密隧道，便宜，适合小流量
+  Direct Connect → 专用物理线路，稳定，适合大流量
+
 IAM Role → 授权 Lambda 访问 RDS / S3 / 其他服务
-安全组   → 控制每个资源的进出流量
+路由表   → 决定子网是公有还是私有
 API Gateway → 公网唯一入口 → Lambda
 ```
