@@ -1,0 +1,309 @@
+# SAM 模板版本，固定写法
+AWSTemplateFormatVersion: '2010-09-09'
+# 声明这是一个 SAM 模板，AWS 会把 SAM 语法转换成 CloudFormation
+Transform: AWS::Serverless-2016-10-31
+
+# 全局配置，所有 Lambda 函数共享这些默认值
+Globals:
+  Function:
+    Runtime: nodejs22.x      # 运行时，用 Node.js 22
+    Timeout: 30              # 最长执行 30 秒，超时报错
+    MemorySize: 512          # 分配 512MB 内存
+
+# 所有资源定义在这里
+Resources:
+
+  # ============================================================
+  # VPC 网络
+  # ============================================================
+
+  # 创建 VPC，划出一块私有网络空间
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16           # VPC 的 IP 范围，65536 个地址
+      EnableDnsHostnames: true          # 允许 VPC 内资源有 DNS 域名
+      EnableDnsSupport: true            # 启用 DNS 解析
+      Tags:
+        - Key: Name
+          Value: better-t-stack-vpc
+
+  # 公有子网，放 NAT Gateway
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC                          # 属于哪个 VPC，!Ref 引用上面定义的 VPC
+      CidrBlock: 10.0.1.0/24                   # 子网 IP 范围，256 个地址
+      AvailabilityZone: ap-southeast-1a        # 放在哪个可用区
+      MapPublicIpOnLaunch: true                # 放进来的资源自动分配公网 IP
+      Tags:
+        - Key: Name
+          Value: better-t-stack-public
+
+  # 私有子网 1，放 Lambda 和 RDS
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: ap-southeast-1a
+      Tags:
+        - Key: Name
+          Value: better-t-stack-private-1
+
+  # 私有子网 2，放 RDS 备库（RDS 强制要求两个不同可用区的子网）
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: ap-southeast-1b        # 不同可用区
+      Tags:
+        - Key: Name
+          Value: better-t-stack-private-2
+
+  # Internet Gateway，VPC 和公网之间的出入口
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: better-t-stack-igw
+
+  # 把 IGW 挂到 VPC 上，两者绑定才能生效
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # 申请一个弹性 IP，给 NAT Gateway 用
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAttachment              # 必须等 IGW 挂好才能申请
+    Properties:
+      Domain: vpc
+
+  # NAT Gateway，让私有子网能出公网
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId   # 绑定弹性 IP，!GetAtt 获取资源的某个属性
+      SubnetId: !Ref PublicSubnet                  # 放在公有子网
+      Tags:
+        - Key: Name
+          Value: better-t-stack-nat
+
+  # 公有子网路由表
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: better-t-stack-public-rt
+
+  # 公有子网路由规则：所有出公网流量走 IGW
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0            # 匹配所有目标
+      GatewayId: !Ref InternetGateway            # 出口是 IGW
+
+  # 把公有子网关联到公有路由表
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # 私有子网路由表
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: better-t-stack-private-rt
+
+  # 私有子网路由规则：所有出公网流量走 NAT Gateway
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway              # 出口是 NAT Gateway
+
+  # 把私有子网 1 关联到私有路由表
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  # 把私有子网 2 关联到私有路由表
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ============================================================
+  # 安全组
+  # ============================================================
+
+  # Lambda 安全组，控制 Lambda 的网络访问
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda security group
+      VpcId: !Ref VPC
+      # 入站规则为空，不允许任何人主动连进 Lambda
+      SecurityGroupEgress:
+        - IpProtocol: -1          # -1 表示所有协议
+          CidrIp: 0.0.0.0/0      # 允许出站所有流量（Lambda 需要出公网调用 GitHub API）
+      Tags:
+        - Key: Name
+          Value: better-t-stack-lambda-sg
+
+  # RDS 安全组，只允许 Lambda 连接数据库
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Name
+          Value: better-t-stack-rds-sg
+
+  # ============================================================
+  # RDS 数据库
+  # ============================================================
+
+  # DB Subnet Group，只用私有子网
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: better-t-stack subnet group
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  # RDS PostgreSQL 实例
+  Database:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: better-t-stack-db
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      EngineVersion: '16'
+      MasterUsername: postgres
+      MasterUserPassword: !Ref DBPassword
+      DBName: bettertstack
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: false                 # 关闭公网访问
+      AllocatedStorage: '20'
+      MultiAZ: false
+    DeletionPolicy: Delete
+
+  # ============================================================
+  # Lambda 函数
+  # ============================================================
+
+  # 迁移 Lambda，部署时自动推表结构
+  MigrationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: better-t-stack-migration
+      CodeUri: apps/server/dist/
+      Handler: migrate.handler
+      Timeout: 300                              # 迁移最多等 5 分钟
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Sub
+            "postgresql://postgres:${DBPassword}@${Database.Endpoint.Address}:5432/bettertstack?sslmode=no-verify"
+      Policies:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # Custom Resource，触发迁移 Lambda
+  DBMigration:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: Database
+    Properties:
+      ServiceToken: !GetAtt MigrationFunction.Arn
+      # 值变化时 CloudFormation 会重新触发迁移，部署时传入不同的 DeploymentId 即可
+      DeploymentId: !Ref DeploymentId
+
+  ApiFunction:
+    Type: AWS::Serverless::Function           # SAM 的 Lambda 类型，比原生 CloudFormation 简洁
+    DependsOn: DBMigration                    # 确保迁移完成后再创建 API Lambda
+    Properties:
+      FunctionName: better-t-stack-api
+      CodeUri: apps/server/dist/              # 只上传构建产物，不包含 node_modules
+      Handler: index.handler                  # 入口文件和导出的函数名
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1               # Lambda 放在私有子网
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup          # 绑定 Lambda 安全组
+      Environment:
+        Variables:
+          DATABASE_URL: !Sub                  # !Sub 用于字符串拼接，替换变量
+            "postgresql://postgres:${DBPassword}@${Database.Endpoint.Address}:5432/bettertstack?sslmode=no-verify"
+          CORS_ORIGIN: !Ref CORSOrigin        # 从参数传入前端地址
+      Policies:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole   # Lambda 加入 VPC 需要这个权限
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole       # Lambda 写 CloudWatch 日志需要这个权限
+      Events:
+        ApiEvent:
+          Type: HttpApi                       # 自动创建 API Gateway HTTP API
+          Properties:
+            Path: /{proxy+}                   # 匹配所有路径
+            Method: ANY                       # 匹配所有 HTTP 方法
+
+# ============================================================
+# 参数，部署时传入，不硬编码在模板里
+# ============================================================
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: RDS master password
+
+  DeploymentId:
+    Type: String
+    Description: 每次部署时传入不同的值以触发迁移（如时间戳）
+
+  CORSOrigin:
+    Type: String
+    Description: Frontend URL for CORS
+    Default: https://better-t-stack-app.pages.dev
+
+# ============================================================
+# 输出，部署完成后显示重要信息
+# ============================================================
+Outputs:
+  ApiUrl:
+    Description: API Gateway URL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.ap-southeast-1.amazonaws.com"
+
+  DatabaseEndpoint:
+    Description: RDS endpoint
+    Value: !GetAtt Database.Endpoint.Address
