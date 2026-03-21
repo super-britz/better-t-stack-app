@@ -228,7 +228,7 @@ Resources:
   Bastion:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.micro
+      InstanceType: t4g.micro
       ImageId: !Ref BastionAMI
       IamInstanceProfile: !Ref BastionInstanceProfile
       SubnetId: !Ref PrivateSubnet1          # 放私有子网，通过 NAT 出网连 SSM
