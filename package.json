@@ -21,7 +21,7 @@
     "db:stop": "turbo -F @better-t-stack-app/db db:stop",
     "db:down": "turbo -F @better-t-stack-app/db db:down",
     "check": "biome check --write .",
-    "deploy": "pnpm build && sam deploy --parameter-overrides DeploymentId=$(date +%s) DBPassword=$DB_PASSWORD"
+    "deploy": "pnpm build && sam deploy --template-file template.yaml --stack-name better-t-stack --capabilities CAPABILITY_IAM --region ap-southeast-1 --resolve-s3 --no-confirm-changeset --parameter-overrides DeploymentId=$(date +%s) DBPassword=$DB_PASSWORD"
   },
   "dependencies": {
     "@better-t-stack-app/env": "workspace:*",
