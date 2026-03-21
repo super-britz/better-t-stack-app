@@ -168,7 +168,20 @@ Resources:
         - Key: Name
           Value: better-t-stack-lambda-sg
 
-  # RDS 安全组，只允许 Lambda 连接数据库
+  # 跳板机安全组，入站不开放（SSM 走出站连接，不需要开 22 端口）
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bastion for SSM port forwarding
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0            # SSM Agent 需要出站连接 AWS 服务
+      Tags:
+        - Key: Name
+          Value: better-t-stack-bastion-sg
+
+  # RDS 安全组，允许 Lambda 和跳板机连接数据库
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -179,9 +192,51 @@ Resources:
           FromPort: 5432
           ToPort: 5432
           SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
       Tags:
         - Key: Name
           Value: better-t-stack-rds-sg
+
+  # ============================================================
+  # SSM 跳板机（用于本地连接 RDS 查看数据）
+  # ============================================================
+
+  # 跳板机 IAM 角色，只给 SSM 权限
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BastionRole
+
+  # 跳板机，t3.micro 免费层，Amazon Linux 2023 自带 SSM Agent
+  Bastion:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref BastionAMI
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      SubnetId: !Ref PrivateSubnet1          # 放私有子网，通过 NAT 出网连 SSM
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: better-t-stack-bastion
 
   # ============================================================
   # RDS 数据库
@@ -296,6 +351,11 @@ Parameters:
     Description: Frontend URL for CORS
     Default: https://better-t-stack-app.pages.dev
 
+  BastionAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 ARM64 AMI（自动从 SSM 参数获取最新版）
+
 # ============================================================
 # 输出，部署完成后显示重要信息
 # ============================================================
@@ -307,3 +367,7 @@ Outputs:
   DatabaseEndpoint:
     Description: RDS endpoint
     Value: !GetAtt Database.Endpoint.Address
+
+  BastionInstanceId:
+    Description: SSM 跳板机 Instance ID，用于端口转发
+    Value: !Ref Bastion
